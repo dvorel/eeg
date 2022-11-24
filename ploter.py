@@ -157,7 +157,7 @@ def main():
     MAXY = 1024
     MAXX = 1500
     PORT = 'COM6'
-    BAUD = 115200
+    BAUD = 500000
 
     #plot style
     N = 16
