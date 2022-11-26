@@ -3,7 +3,6 @@ Plot and save values of 16 input values from COM (serial) port.
 
 #### github.com/dvorel ####
 """
-
 from threading import Thread
 import serial
 import time
@@ -13,6 +12,10 @@ import os
 
 import datetime
 
+from random import randint
+import cv2
+import numpy as np
+
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib import style
@@ -20,7 +23,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 
 class serialPlot:
-    def __init__(self, serialPort='/dev/ttyUSB0', serialBaud=38400, plotLength=100, numberOfChannels=3, delimiter=",", saveDir="runs"):
+    def __init__(self, serialPort='/dev/ttyUSB0', serialBaud=38400, plotLength=100, numberOfChannels=3, delimiter=",", saveDir="runs", delay=5000):
         self.port = serialPort
         self.baud = serialBaud
         self.plotMaxLength = plotLength
@@ -28,6 +31,10 @@ class serialPlot:
         self.saveDir = saveDir
         self.rawData = bytearray()
 
+        self.actionThread = None
+        self.action = -1
+        self.actions = []
+        self.actionDelay = delay
         
         self.data = []
         for i in range(numberOfChannels):   # give an array for each type of data and store them in a list
@@ -63,13 +70,6 @@ class serialPlot:
 
     
     def getSerialData(self, frame, lines, pltNumber):
-        #print("GSD: ", frame, index)
-        # currentTimer = time.perf_counter()
-        # index = 0
-        # self.plotTimer = int((currentTimer - self.previousTimer) * 1000)     # the first reading will be erroneous
-        # self.previousTimer = currentTimer
-        # timeText[index].set_text('Plot Interval = ' + str(self.plotTimer) + 'ms')
-
         if pltNumber == 0:  # in order to make all the clocks show the same reading
             currentTimer = time.perf_counter()
             self.plotTimer = int((currentTimer - self.previousTimer) * 1000)     # the first reading will be erroneous
@@ -106,6 +106,8 @@ class serialPlot:
             
         for i in range(len(values)):
             self.data[i].append(values[i])
+        
+        self.actions.append(self.action)
 
         return True
     
@@ -131,7 +133,9 @@ class serialPlot:
     def close(self, fig, data):
         self.isRun = False
         self.thread.join()
+        self.actionThread.join()
         self.serialConnection.close()
+        
         print('Disconnected...')
 
         dir = str(self.getSaveDir())
@@ -143,12 +147,35 @@ class serialPlot:
         
         #save csv
         df = pd.DataFrame(self.data)
-        df.to_csv(dir + '/csvData.csv', header=False)     
+        df.loc[len(df.index)] = self.actions
+        df.to_csv(dir + '/csvData.csv', header=False)  
 
-        #save some info
+        #save txt
         with open(dir + '/info.txt', 'w') as f:
             for k, v in data.items():
                 f.write(str(k) + " : " + str(v) + "\n")
+
+
+    def random_digit(self):
+        while self.isRun:
+            self.action = str(randint(0, 9))
+            arr = np.zeros((1080, 1920, 1))
+            cv2.putText(arr, self.action, (400, 700), cv2.FONT_HERSHEY_SIMPLEX, 30, (255, 255, 255), 8)
+            cv2.imshow("num", arr)
+            cv2.waitKey(self.actionDelay)
+            
+        
+    def on_press(self, event):
+        if event == "f1":
+            if self.actionThread != None:
+                print("Thread running!")
+                return
+
+            self.actionThread = Thread(target=self.random_digit)
+            self.actionThread.start()
+            return
+
+        self.action = event.key
 
 
 
@@ -158,6 +185,7 @@ def main():
     MAXX = 1500
     PORT = 'COM6'
     BAUD = 500000
+    DELAY = 5000
 
     #plot style
     N = 16
@@ -167,6 +195,13 @@ def main():
     style = 'w-'
     
 
+    s = serialPlot(PORT, BAUD, MAXX, numberOfChannels=N)   # initializes all required variables
+    s.actionDelay = DELAY
+
+
+    #s.readSerialStart()                                               # starts background thread
+    t_start= time.time_ns()
+ 
     #collect some data for txt file
     runData = {}
     runData["SAMPLES:"] = str(SAMPLES)
@@ -174,11 +209,6 @@ def main():
     runData["Electrodes:"] = str(N)
     runData["Labels:"] = str(LABELS)
     runData["Start time:"] = str(datetime.datetime.now())
-
-    t_start= time.time_ns()
-
-    s = serialPlot(PORT, BAUD, MAXX, numberOfChannels=N)   # initializes all required variables
-    s.readSerialStart()                                               # starts background thread
 
     # plotting starts below
     pltInterval = 50    # Period at which the plot animation updates [ms]
@@ -191,7 +221,10 @@ def main():
     anims = []
 
     plt.style.use('dark_background')
+    
     fig, plots =  plt.subplots(nrows=N//NCOLS, ncols=NCOLS, figsize=(1000,800))
+
+    fig.canvas.mpl_connect('key_press_event', s.on_press)
 
     plt.subplots_adjust(left=0.001,
                     bottom=0.1,
@@ -209,7 +242,7 @@ def main():
         lines.append(ax.plot([], [], style, linewidth=0.5, label='_nolegend_')[0])
 
         anims.append(animation.FuncAnimation(fig, s.getSerialData, fargs=(lines, i), interval=pltInterval)) # fargs has to be a tuple
-
+    
     
     plt.show()
 
@@ -217,6 +250,8 @@ def main():
     runData["Run time (ns):"] = str(time.time_ns() - t_start)
     runData["Run time (s):"] = str((time.time_ns() - t_start) / 1000000000)
     runData["Samples:"] = str(len(s.data))
+
+    
     s.close(fig, runData)
 
 
